@@ -1,0 +1,67 @@
+---
+title: "PC Demonstration"
+author: "JAS"
+date: " "
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is a demonstration of a "simple" causal discovery algorithm, the PC algorithm. It assumes no unmeasured confounding. We will be using a built-in dataset and causal graph to demonstrate the use of this algorithm. Pcalg is the package for running the PC algorithm, while Rgraphviz is the package that allows visualization of the causal graphs. We need both for this demonstration.
+
+Source: https://cran.r-project.org/web/packages/pcalg/vignettes/vignette2018.pdf
+
+NOTE: The use of PC algorithm requires installation of Bioconductor. (The package pcalg relies on two other packages RBGL and graph which are not available on the CRAN.) One can use commented code to install Bioconductor. Just note it can take awhile to install.
+
+
+
+```{r packages}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+ install.packages("BiocManager")
+BiocManager::install()
+BiocManager::install(c("RBGL", "graph"))
+BiocManager::install(c("Rgraphviz"))
+
+
+library(pcalg)
+library("Rgraphviz")
+
+data("gmG")
+
+temp<-gmG$x
+
+#Visualize true DAG
+plot(gmG$g, main = "")
+
+```
+
+From slides: The corresponding sufficient statistic (suffStat) consists of the correlation matrix of the data and the sample size. Based on this input, the function skeleton() estimates the skeleton of the causal structure. Predefined function gaussCItest() is used for testing conditional #independence. This removes edges where the data do not support direct causes.
+
+```{r learndagpart1}
+suffStat <- list(C = cor(gmG$x), n = nrow(gmG$x))
+skel.gmg<-skeleton(suffStat, indepTest = gaussCItest, alpha=0.01, p = ncol(gmG$x))
+plot(skel.gmg)
+```
+
+In this step, the pc-algorithm is used to determine potential directions of the connections between features. From slides: Start with collider test of "unshielded triples" (i.e. X3 is a collider because X1 and X2 are independent in the data)
+
+An unshielded triple is where a connects to b and b connects to c but a and c are independent. Determine if collider if b is not part of any conditioning set that causes a and c to be conditionally independent.
+
+Process continues to see if further edges can be oriented while avoiding any cycles.
+
+```{r learndagpart2}
+pc.fit <- pc(suffStat, indepTest = gaussCItest, p = ncol(gmG$x), alpha = 0.01)
+
+plot(pc.fit, main = "")
+
+#Compare truth to skeleton to results from PC algorithm
+par(mfrow = c(1, 3))
+plot(gmG$g, main = "") 
+plot(skel.gmg, main="")
+plot(pc.fit, main = "")
+
+```
+
+

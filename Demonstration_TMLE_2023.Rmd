@@ -1,0 +1,117 @@
+---
+title: "Demonstration_TMLE"
+author: "JAS"
+date: " "
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Demonstration based on workshop and materials delivered at SER 2018 Annual Meeting by J. Ahern and L. Balzer. 
+
+This demonstration will use simulated data on an outcome (Y), a binary treatment (A), and 4 confounders (W1-W4).
+
+For our example, Y is the proportion of a community with physician's visits for asthma in the past 12 months. The variable 'A' indicates whether the community currently limits motor vehicle traffic between the hours of 10AM and 6PM. W1 is whether the community us urban (1) or rural (0). W2 is the proportion of residents who live within 500m of a roadway. W3 is a derived neighborhood deprivation index that was constructed using multiple SES variables. W4 is a derived housing quality index.  
+
+
+```{r setup}
+library(SuperLearner)
+library(ltmle)
+library(glmnet)
+library(caret)
+library(randomForest)
+library(gam)
+
+data<-read.csv("~/CausalWorkshop.csv")
+data<-CausalWorkshop
+#Create data frame of features, no outcome
+features<-subset(CausalWorkshop, select=-Y)
+
+#Set Superlearner library
+
+listWrappers()
+
+SL.library.demo<-c("SL.glm", "SL.gam", "SL.randomForest")
+
+
+```
+
+### Step-by-step estimation of TMLE
+
+```{r implementation}
+set.seed(123)
+
+#Estimate conditional mean function E(Y|A,W) with Super Learner
+#Note, using binomial family because our outcome is a probability. Want it bounded by 0,1
+
+SL.outcome.model<-SuperLearner(Y=data$Y, X=features, SL.library=SL.library.demo, family="binomial") 
+SL.outcome.model
+
+#Obtain predicted outcomes based on SuperLearner above E-hat(Y|A,W)
+
+SL.predict.outcome<- predict(SL.outcome.model, newdata=data)$pred
+
+#Create 2 datasets: one where everyone is exposed (A=1), one where everyone is unexposed (A=0)
+data.exp<-data.unexp<-data
+data.exp$A<-1
+data.unexp$A<-0
+
+#Get predictions based on SuperLearner where  all are exposed
+
+#E-hat(Y|A=1, W)
+SL.predict.outcome.exp<- predict(SL.outcome.model, newdata=data.exp)$pred
+
+#E-hat(Y|A=0, W)
+SL.predict.outcome.unexp<- predict(SL.outcome.model, newdata=data.unexp)$pred
+
+
+#Use superLearner to estimate the conditional probability of being exposed, given the measured covariates (i.e. propensity score)
+SL.pscore<- SuperLearner(Y=data$A, X=subset(data, select=-c(A,Y)), SL.library=SL.library.demo, family="binomial")
+
+
+#CALCULATE  CLEVER COVARIATE USED FOR TARGETING
+#Predicted probability of A
+SL.predict.prob.exp<-SL.pscore$SL.predict
+#Predicted probability of not-A
+SL.predict.prob.unexp<-1-SL.predict.prob.exp
+
+Clever.covariate<- as.numeric(data$A==1)/SL.predict.prob.exp -
+as.numeric(data$A==0)/SL.predict.prob.unexp
+
+Clever.covariate.1<- 1/SL.predict.prob.exp
+
+Clever.covariate.0<- -1/SL.predict.prob.unexp
+
+summary(Clever.covariate)
+
+#TARGETING STEPS
+
+#Regress outcome on the clever covariate with initial estimator as the offset.
+#Note qlogis is logit(x)=log(x/(1-x))
+
+logitUpdate<- glm(data$Y ~ -1 +offset(qlogis(SL.predict.outcome)) + Clever.covariate, family='binomial')
+
+#store the beta estimate from above step
+epsilon<-logitUpdate$coef
+
+#Plug in that beta estimate to target the estimates of the outcome when everyone is exposed and when no one is exposed
+#Note plogis is the inverse logit function
+
+target.predict.outcome.exp<- plogis( qlogis(SL.predict.outcome.exp)+ epsilon*Clever.covariate.1)
+target.predict.outcome.unexp<- plogis( qlogis(SL.predict.outcome.unexp)+ epsilon*Clever.covariate.0)
+
+TMLE.estimate<-mean(target.predict.outcome.exp-target.predict.outcome.unexp)
+TMLE.estimate
+```
+
+### Use LTMLE Package
+
+```{r}
+set.seed(123)
+ltmle.SL<- ltmle(data=data, Anodes='A', Ynodes='Y', abar=list(1,0), SL.library=SL.library.demo)
+summary(ltmle.SL)
+
+```
+
